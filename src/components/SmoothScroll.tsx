@@ -1,10 +1,14 @@
 "use client";
 
 import React, { useEffect } from "react";
+import gsap from "gsap";
 import Lenis from "lenis";
 
 export default function SmoothScroll({ children }: { children: React.ReactNode }) {
   useEffect(() => {
+    // Configure GSAP ticker lag smoothing (0 prevents lag jump spikes)
+    gsap.ticker.lagSmoothing(500, 33);
+
     // Initialize Lenis for butter-smooth inertial scrolling
     const lenis = new Lenis({
       duration: 1.2,
@@ -16,12 +20,11 @@ export default function SmoothScroll({ children }: { children: React.ReactNode }
       touchMultiplier: 1.5,
     });
 
-    let rfId: number;
-    function raf(time: number) {
-      lenis.raf(time);
-      rfId = requestAnimationFrame(raf);
-    }
-    rfId = requestAnimationFrame(raf);
+    // Synchronize Lenis strictly with GSAP ticker clock (single rAF loop)
+    const updateLenis = (time: number) => {
+      lenis.raf(time * 1000);
+    };
+    gsap.ticker.add(updateLenis);
 
     // Provide globally so any component can interact if needed
     (window as unknown as { __lenis?: Lenis }).__lenis = lenis;
@@ -32,7 +35,7 @@ export default function SmoothScroll({ children }: { children: React.ReactNode }
     }
 
     return () => {
-      cancelAnimationFrame(rfId);
+      gsap.ticker.remove(updateLenis);
       lenis.destroy();
       delete (window as unknown as { __lenis?: Lenis }).__lenis;
     };

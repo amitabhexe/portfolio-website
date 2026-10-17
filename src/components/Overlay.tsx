@@ -4,6 +4,7 @@ import React from "react";
 import { motion, MotionValue, useTransform } from "framer-motion";
 import { ArrowDown, Code2, Sparkles, Layers, Cpu, Compass } from "lucide-react";
 import { PORTFOLIO_DATA } from "@/data/portfolioData";
+import { MOTION_CONFIG } from "@/lib/motionConfig";
 
 interface OverlayProps {
   activeSection: number;
@@ -12,33 +13,70 @@ interface OverlayProps {
 }
 
 export default function Overlay({ activeSection, scrollYProgress, onAdvance }: OverlayProps) {
-  // Continuous lockstep transforms tied to fractional frame position (0.0 to 1.0)
-  // Section 0: Frame 0 (Progress ~0.0)
-  const opacity0 = useTransform(scrollYProgress, [0, 0.12, 0.24], [1, 1, 0]);
-  const y0 = useTransform(scrollYProgress, [0, 0.24], [0, -50]);
-  const scale0 = useTransform(scrollYProgress, [0, 0.24], [1, 0.94]);
-  const pointerEvents0 = useTransform(scrollYProgress, (v) => (v < 0.24 ? "auto" : "none"));
+  const { textTiming } = MOTION_CONFIG;
 
-  // Section 1: Frame 40 (Progress ~0.49)
+  // Section 0: Frame 0 (Progress ~0.0). Old text fades out in first ~30% of 0->1 transition
+  const opacity0 = useTransform(
+    scrollYProgress,
+    [textTiming.section0.fadeStart, textTiming.section0.fadeEnd],
+    [1, 0]
+  );
+  const y0 = useTransform(
+    scrollYProgress,
+    [textTiming.section0.fadeStart, textTiming.section0.exitEnd],
+    [0, -50]
+  );
+  const scale0 = useTransform(
+    scrollYProgress,
+    [textTiming.section0.fadeStart, textTiming.section0.exitEnd],
+    [1, 0.94]
+  );
+  const pointerEvents0 = useTransform(
+    scrollYProgress,
+    (v) => (v < textTiming.section0.exitEnd ? "auto" : "none")
+  );
+
+  // Section 1: Frame 40 (Progress ~0.49). New text enters in last ~40% of 0->1; exits in first ~30% of 1->2
   const opacity1 = useTransform(
     scrollYProgress,
-    [0.24, 0.38, 0.58, 0.72],
+    [
+      textTiming.section1.enterStart,
+      textTiming.section1.enterEnd,
+      textTiming.section1.exitStart,
+      textTiming.section1.exitEnd,
+    ],
     [0, 1, 1, 0]
   );
   const y1 = useTransform(
     scrollYProgress,
-    [0.24, 0.38, 0.58, 0.72],
+    [
+      textTiming.section1.enterStart,
+      textTiming.section1.enterEnd,
+      textTiming.section1.exitStart,
+      textTiming.section1.exitEnd,
+    ],
     [50, 0, 0, -50]
   );
   const pointerEvents1 = useTransform(
     scrollYProgress,
-    (v) => (v >= 0.24 && v < 0.72 ? "auto" : "none")
+    (v) => (v >= textTiming.section1.enterStart && v < textTiming.section1.exitEnd ? "auto" : "none")
   );
 
-  // Section 2: Frame 81 (Progress ~1.0)
-  const opacity2 = useTransform(scrollYProgress, [0.72, 0.88, 1.0], [0, 1, 1]);
-  const y2 = useTransform(scrollYProgress, [0.72, 0.88, 1.0], [50, 0, 0]);
-  const pointerEvents2 = useTransform(scrollYProgress, (v) => (v >= 0.72 ? "auto" : "none"));
+  // Section 2: Frame 81 (Progress ~1.0). New text enters in last ~40% of 1->2
+  const opacity2 = useTransform(
+    scrollYProgress,
+    [textTiming.section2.enterStart, textTiming.section2.enterEnd],
+    [0, 1]
+  );
+  const y2 = useTransform(
+    scrollYProgress,
+    [textTiming.section2.enterStart, textTiming.section2.enterEnd],
+    [50, 0]
+  );
+  const pointerEvents2 = useTransform(
+    scrollYProgress,
+    (v) => (v >= textTiming.section2.enterStart ? "auto" : "none")
+  );
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 w-full h-full flex flex-col justify-center px-6 md:px-16 lg:px-24 select-none">
@@ -54,7 +92,7 @@ export default function Overlay({ activeSection, scrollYProgress, onAdvance }: O
       >
         {/* Status Pill */}
         <div className="mb-6">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-white/10 bg-white/[0.04] backdrop-blur-md shadow-sm">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-white/10 bg-[#0d0e15]/90">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
@@ -66,7 +104,7 @@ export default function Overlay({ activeSection, scrollYProgress, onAdvance }: O
         </div>
 
         {/* Hero Title */}
-        <h1 className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black tracking-tighter text-white max-w-5xl leading-[0.95] drop-shadow-2xl uppercase">
+        <h1 className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black tracking-tighter text-white max-w-5xl leading-[0.95] uppercase">
           {PORTFOLIO_DATA.hero.title}
           <span className="text-amber-500">.</span>
         </h1>
@@ -133,7 +171,7 @@ export default function Overlay({ activeSection, scrollYProgress, onAdvance }: O
           {PORTFOLIO_DATA.overlaySections.about.badges.map((badge, idx) => (
             <div
               key={badge}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg border border-white/10 bg-white/[0.03] backdrop-blur-md text-xs font-mono text-neutral-200"
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg border border-white/10 bg-[#0d0e15]/90 text-xs font-mono text-neutral-200"
             >
               {idx === 0 && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
               {idx === 1 && <Cpu className="w-3.5 h-3.5 text-cyan-400" />}
@@ -179,7 +217,7 @@ export default function Overlay({ activeSection, scrollYProgress, onAdvance }: O
           {PORTFOLIO_DATA.overlaySections.approach.badges.map((badge, idx) => (
             <div
               key={badge}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg border border-white/10 bg-white/[0.03] backdrop-blur-md text-xs font-mono text-neutral-200"
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg border border-white/10 bg-[#0d0e15]/90 text-xs font-mono text-neutral-200"
             >
               {idx === 0 && <Code2 className="w-3.5 h-3.5 text-cyan-400" />}
               {idx === 1 && <Compass className="w-3.5 h-3.5 text-amber-400" />}

@@ -43,13 +43,14 @@ export default function SectionNavIndicators({
             </span>
 
             {/* Indicator Dot / Pill */}
-            <div className="relative flex items-center justify-center">
+            <div className="relative flex items-center justify-center w-2.5 h-6">
               <div
-                className={`transition-all duration-500 rounded-full ${
+                className={`w-2 h-6 rounded-full origin-center transition-all duration-300 ${
                   isActive
-                    ? "w-2.5 h-6 bg-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.8)]"
-                    : "w-2 h-2 bg-white/20 group-hover:bg-white/50 group-hover:scale-125"
+                    ? "bg-amber-400 scale-y-100 opacity-100"
+                    : "bg-white/40 scale-y-[0.33] opacity-60 group-hover:opacity-100 group-hover:scale-y-[0.5]"
                 }`}
+                style={{ willChange: "transform, opacity" }}
               />
             </div>
           </button>

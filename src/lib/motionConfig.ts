@@ -12,23 +12,48 @@ export const MOTION_CONFIG = {
   ],
 
   // Transition durations (in seconds)
-  // Easily tweak sectionTransition between 2.2s and 2.8s for your desired cinematic pacing
+  // 1.2s is snappier, 1.6s is more cinematic. Tuned to 1.4s.
   durations: {
-    sectionTransition: 2.4, // Recommended range: 2.2s – 2.8s
-    cooldownAfterTransition: 0.15, // Brief debounce to swallow residual trackpad inertia
+    sectionTransition: 1.4, // 1.2s is snappier, 1.6s is more cinematic
+    cooldownAfterTransition: 0.25, // ~250ms cooldown to block trackpad inertia while feeling responsive
     textReveal: 0.8,
     cardStagger: 0.1,
     hover: 0.3,
   },
 
   // GSAP easing equations:
-  // "sine.inOut" has a symmetric bell-curve velocity profile:
-  // Starts slowly, accelerates smoothly through the middle, decelerates and lands softly.
-  // Alternative options: "power2.inOut" or custom cubic-bezier(0.45, 0, 0.55, 1).
+  // "power2.inOut" provides a smooth symmetric bell-curve velocity profile (no bounce, elastic, back, or expo)
   easings: {
-    sectionTween: "sine.inOut",
+    sectionTween: "power2.inOut",
     textEnter: "power3.out",
     textExit: "power2.in",
+  },
+
+  // Proportional text transition thresholds relative to full sequence progress (0.0 to 1.0)
+  // - Old section text fades out in the first ~30% of each transition
+  // - New section text enters in the last ~40% of each transition
+  textTiming: {
+    // Section 0 (Hero): frame 0 (progress 0.0). Exits in first ~30% of 0->1 tween (0.30 * 0.494 ≈ 0.15)
+    section0: {
+      fadeStart: 0.0,
+      fadeEnd: 0.15,
+      exitEnd: 0.18,
+    },
+    // Section 1 (About): frame 40 (progress ~0.494)
+    // Enters in last ~40% of 0->1 tween (~0.30 to 0.494)
+    // Exits in first ~30% of 1->2 tween (0.494 + 0.30 * 0.506 ≈ 0.65)
+    section1: {
+      enterStart: 0.30,
+      enterEnd: 0.494,
+      exitStart: 0.494,
+      exitEnd: 0.65,
+    },
+    // Section 2 (Approach): frame 81 (progress 1.0)
+    // Enters in last ~40% of 1->2 tween (1.0 - 0.40 * 0.506 ≈ 0.80 to 1.0)
+    section2: {
+      enterStart: 0.80,
+      enterEnd: 1.0,
+    },
   },
 
   // Symmetric cubic-bezier curve for CSS / Framer Motion

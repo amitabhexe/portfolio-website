@@ -24,9 +24,9 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Cached Image elements and decode statuses
-  const imagesRef = useRef<HTMLImageElement[]>([]);
-  const isDecodedRef = useRef<boolean[]>(new Array(TOTAL_FRAMES).fill(false));
+  // Pre-decoded ImageBitmaps pre-scaled to canvas dimensions (zero decode on main thread)
+  const bitmapsRef = useRef<(ImageBitmap | HTMLImageElement)[]>(new Array(TOTAL_FRAMES));
+  const isReadyRef = useRef<boolean>(false);
 
   // State Machine: Explicit "GUIDED" (locked hero) vs "FREE" (page document scroll)
   const [appState, setAppState] = useState<AppState>("GUIDED");
@@ -60,6 +60,24 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
     dpr: 1,
   });
 
+  // Cached 2D canvas context and precomputed cover-fit rectangle for 1:1 blits
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const rectRef = useRef<{
+    offsetX: number;
+    offsetY: number;
+    drawWidth: number;
+    drawHeight: number;
+    targetWidth: number;
+    targetHeight: number;
+  }>({
+    offsetX: 0,
+    offsetY: 0,
+    drawWidth: 0,
+    drawHeight: 0,
+    targetWidth: 0,
+    targetHeight: 0,
+  });
+
   // Loading state (frame 0 decode hides initial preloader)
   const [loadPercent, setLoadPercent] = useState<number>(0);
   const [isReady, setIsReady] = useState<boolean>(false);
@@ -71,66 +89,39 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
   const [debugScrollY, setDebugScrollY] = useState<number>(0);
   const [showDebugHUD, setShowDebugHUD] = useState<boolean>(true);
 
-  // Low-level imperative render: draws frame with subpixel cover fit and retina support
+  // Low-level imperative render: pure 1:1 blit using cached context and precomputed cover-fit rect
   const renderFrame = useCallback((frameIndex: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) return;
-
-    // Use requested frame, or fallback to nearest loaded frame to eliminate any flash
-    let img = imagesRef.current[frameIndex];
-    if (!img || !isDecodedRef.current[frameIndex]) {
-      let nearestIndex = -1;
-      let minDiff = Infinity;
-      for (let i = 0; i < TOTAL_FRAMES; i++) {
-        if (isDecodedRef.current[i]) {
-          const diff = Math.abs(i - frameIndex);
-          if (diff < minDiff) {
-            minDiff = diff;
-            nearestIndex = i;
-          }
-        }
-      }
-      if (nearestIndex !== -1) {
-        img = imagesRef.current[nearestIndex];
-      }
+    let ctx = ctxRef.current;
+    if (!ctx) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      ctx = canvas.getContext("2d", { alpha: false });
+      ctxRef.current = ctx;
+      if (!ctx) return;
     }
 
-    if (!img || !img.complete || img.naturalWidth === 0) return;
+    const img = bitmapsRef.current[frameIndex];
+    if (!img) return;
 
-    const { width, height } = dimensionsRef.current;
-    if (width === 0 || height === 0) return;
+    const rect = rectRef.current;
+    if (rect.drawWidth === 0 || rect.drawHeight === 0) return;
 
-    const imgWidth = img.naturalWidth;
-    const imgHeight = img.naturalHeight;
-    const scale = Math.max(width / imgWidth, height / imgHeight);
-
-    const drawWidth = imgWidth * scale;
-    const drawHeight = imgHeight * scale;
-    const offsetX = (width - drawWidth) * 0.5;
-    const offsetY = (height - drawHeight) * 0.5;
-
-    ctx.save();
-    ctx.fillStyle = "#050508";
-    ctx.fillRect(0, 0, width, height);
-
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-
-    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
-    ctx.restore();
+    // Direct 1:1 blit without runtime scaling, save/restore, or fillRect
+    if ("width" in img && img.width === rect.drawWidth && img.height === rect.drawHeight) {
+      ctx.drawImage(img, rect.offsetX, rect.offsetY);
+    } else {
+      ctx.drawImage(img, rect.offsetX, rect.offsetY, rect.drawWidth, rect.drawHeight);
+    }
   }, []);
 
-  // Sync canvas buffer size to viewport * DPR (invoked only on resize)
+  // Sync canvas buffer size to viewport * DPR (capped at 1.5) and precompute cover rect
   const updateDimensions = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const width = window.innerWidth;
     const height = window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
 
     dimensionsRef.current = { width, height, dpr };
 
@@ -143,9 +134,35 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
     }
 
     const ctx = canvas.getContext("2d", { alpha: false });
+    ctxRef.current = ctx;
     if (ctx) {
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "medium";
     }
+
+    // Precompute cover-fit rectangle in buffer pixel coordinates
+    const imgAspect = 800 / 450;
+    const canvasAspect = targetWidth / targetHeight;
+    let drawWidth = targetWidth;
+    let drawHeight = targetHeight;
+    if (canvasAspect > imgAspect) {
+      drawWidth = targetWidth;
+      drawHeight = Math.round(targetWidth / imgAspect);
+    } else {
+      drawHeight = targetHeight;
+      drawWidth = Math.round(targetHeight * imgAspect);
+    }
+    const offsetX = Math.round((targetWidth - drawWidth) * 0.5);
+    const offsetY = Math.round((targetHeight - drawHeight) * 0.5);
+
+    rectRef.current = {
+      offsetX,
+      offsetY,
+      drawWidth,
+      drawHeight,
+      targetWidth,
+      targetHeight,
+    };
 
     // Immediately redraw after resize to prevent blank canvas
     const currentFrame = Math.round(frameState.current.frame);
@@ -156,7 +173,7 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
   // Section Transition Engine: Bell-curve easing with seamless mid-flight interruptibility
   const goToSection = useCallback(
     (targetSection: number, isInterrupt = false) => {
-      if (targetSection < 0 || targetSection > 2) return;
+      if (targetSection < 0 || targetSection > 2 || !isReadyRef.current) return;
 
       const currentFractionalFrame = frameState.current.frame;
       const targetFrame = MOTION_CONFIG.sections[targetSection].targetFrame;
@@ -165,7 +182,6 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
       const direction = targetFrame > currentFractionalFrame ? 1 : -1;
       tweenDirectionRef.current = direction;
       targetSectionRef.current = targetSection;
-      setActiveSection(targetSection);
 
       // Kill any active tween before starting the new one
       if (activeTweenRef.current) {
@@ -178,7 +194,7 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
       const baseDuration = MOTION_CONFIG.durations.sectionTransition; // 2.4s
 
       let calculatedDuration = isInterrupt
-        ? Math.max(0.7, (frameDelta / standardSectionSpan) * baseDuration)
+        ? Math.max(0.4, (frameDelta / standardSectionSpan) * baseDuration)
         : baseDuration;
 
       const reducedMotion = isReducedMotionPreferred();
@@ -191,21 +207,11 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
         frame: targetFrame,
         duration: calculatedDuration,
         ease: MOTION_CONFIG.easings.sectionTween, // "sine.inOut" (pure symmetric bell curve)
-        onUpdate: () => {
-          const currentFrame = frameState.current.frame;
-          // Synchronize continuous 0-to-1 progress for typography transforms
-          scrollYProgress.set(currentFrame / (TOTAL_FRAMES - 1));
-
-          const rounded = Math.round(currentFrame);
-          if (rounded !== lastRenderedIndexRef.current) {
-            renderFrame(rounded);
-            lastRenderedIndexRef.current = rounded;
-          }
-        },
         onComplete: () => {
           activeTweenRef.current = null;
           tweenDirectionRef.current = 0;
           isCooldownRef.current = true;
+          setActiveSection(targetSection);
 
           // Cooldown to absorb trailing trackpad inertia
           setTimeout(() => {
@@ -214,8 +220,32 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
         },
       });
     },
-    [renderFrame, scrollYProgress]
+    []
   );
+
+  // Single GSAP ticker callback: progress update and frame render executed on one clock
+  const lastRenderedFrameRef = useRef<number>(-1);
+  useEffect(() => {
+    gsap.ticker.lagSmoothing(500, 33);
+
+    const onTick = () => {
+      const current = frameState.current.frame;
+      if (current !== lastRenderedFrameRef.current) {
+        scrollYProgress.set(current / (TOTAL_FRAMES - 1));
+        const rounded = Math.round(current);
+        if (rounded !== lastRenderedIndexRef.current) {
+          renderFrame(rounded);
+          lastRenderedIndexRef.current = rounded;
+        }
+        lastRenderedFrameRef.current = current;
+      }
+    };
+
+    gsap.ticker.add(onTick);
+    return () => {
+      gsap.ticker.remove(onTick);
+    };
+  }, [renderFrame, scrollYProgress]);
 
   // ==========================================
   // STATE MACHINE TRANSITION FUNCTIONS
@@ -312,7 +342,7 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
   // Dispatch gesture intent in GUIDED mode (1 = Down, -1 = Up)
   const handleGesture = useCallback(
     (direction: 1 | -1) => {
-      if (appStateRef.current !== "GUIDED") return;
+      if (appStateRef.current !== "GUIDED" || !isReadyRef.current) return;
 
       const isTweening =
         activeTweenRef.current !== null && activeTweenRef.current.isActive();
@@ -362,99 +392,102 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
     [goToSection, switchToFree]
   );
 
-  // Progressive Preload Pipeline (Priority batch + decode)
+  // Progressive Preload Pipeline: Decodes all frames into ImageBitmaps pre-scaled to canvas
   useEffect(() => {
     let isCancelled = false;
-    const images: HTMLImageElement[] = new Array(TOTAL_FRAMES);
     let loadedCount = 0;
 
-    const PRIORITY_BATCH = Math.min(12, TOTAL_FRAMES);
+    // Ensure dimensions are initialized
+    updateDimensions();
+    const { width, height, dpr } = dimensionsRef.current;
+    const targetW = Math.round(width * dpr) || 1920;
+    const targetH = Math.round(height * dpr) || 1080;
 
-    const loadSingleImage = async (index: number): Promise<void> => {
-      return new Promise((resolve) => {
-        const img = new Image();
-        img.src = getFramePath(index);
+    // Source frame aspect ratio is 800:450 = 16:9
+    const scale = Math.max(targetW / 800, targetH / 450);
+    const preScaledW = Math.round(800 * scale);
+    const preScaledH = Math.round(450 * scale);
 
-        img.onload = async () => {
-          if (isCancelled) return resolve();
+    const loadSingleFrame = async (index: number): Promise<void> => {
+      try {
+        const response = await fetch(getFramePath(index));
+        if (isCancelled) return;
+        const blob = await response.blob();
+        if (isCancelled) return;
 
-          if ("decode" in img) {
-            try {
-              await img.decode();
-            } catch {
-              // fallback to standard
-            }
+        let bitmap: ImageBitmap | HTMLImageElement;
+        if (typeof createImageBitmap !== "undefined") {
+          try {
+            bitmap = await createImageBitmap(blob, {
+              resizeWidth: preScaledW,
+              resizeHeight: preScaledH,
+              resizeQuality: "medium",
+            });
+          } catch {
+            bitmap = await createImageBitmap(blob);
           }
+        } else {
+          const img = new Image();
+          img.src = URL.createObjectURL(blob);
+          await img.decode();
+          bitmap = img;
+        }
 
-          if (isCancelled) return resolve();
+        if (isCancelled) return;
+        bitmapsRef.current[index] = bitmap;
+        loadedCount++;
 
-          isDecodedRef.current[index] = true;
-          images[index] = img;
-          loadedCount++;
+        // Draw frame 0 immediately when ready
+        if (index === 0) {
+          renderFrame(0);
+          lastRenderedIndexRef.current = 0;
+        }
 
-          // As soon as frame 0 is ready, draw immediately to canvas and fade out loader
-          if (index === 0) {
-            updateDimensions();
-            renderFrame(0);
-            lastRenderedIndexRef.current = 0;
-            setIsReady(true);
-          }
+        const percent = Math.round((loadedCount / TOTAL_FRAMES) * 100);
+        setLoadPercent(percent);
 
-          if (loadedCount >= 6 || loadedCount === TOTAL_FRAMES) {
-            setIsReady(true);
-          }
-
-          const percent = Math.round((loadedCount / TOTAL_FRAMES) * 100);
-          setLoadPercent(percent);
-
-          resolve();
-        };
-
-        img.onerror = () => {
-          loadedCount++;
-          if (loadedCount >= 6) {
-            setIsReady(true);
-          }
-          resolve();
-        };
-
-        images[index] = img;
-      });
+        if (loadedCount === TOTAL_FRAMES) {
+          isReadyRef.current = true;
+          setIsReady(true);
+        }
+      } catch (err) {
+        console.warn(`Failed to preload frame ${index}:`, err);
+        loadedCount++;
+        if (loadedCount === TOTAL_FRAMES) {
+          isReadyRef.current = true;
+          setIsReady(true);
+        }
+      }
     };
 
     const loadAll = async () => {
-      // 1. High priority first batch
-      const priorityBatch: Promise<void>[] = [];
-      for (let i = 0; i < PRIORITY_BATCH; i++) {
-        priorityBatch.push(loadSingleImage(i));
-      }
-      await Promise.all(priorityBatch);
-      setIsReady(true);
+      // 1. High priority: load frame 0 first so initial visual is available
+      await loadSingleFrame(0);
 
-      // 2. Progressive background stream in concurrent chunks of 6
-      const CHUNK_SIZE = 6;
-      for (let i = PRIORITY_BATCH; i < TOTAL_FRAMES; i += CHUNK_SIZE) {
-        if (isCancelled) break;
-        const chunk: Promise<void>[] = [];
-        for (let j = i; j < Math.min(i + CHUNK_SIZE, TOTAL_FRAMES); j++) {
-          chunk.push(loadSingleImage(j));
+      // 2. Concurrency pool for remaining frames (1 to TOTAL_FRAMES - 1)
+      const CONCURRENCY = 8;
+      let nextIndex = 1;
+
+      async function worker() {
+        while (nextIndex < TOTAL_FRAMES && !isCancelled) {
+          const idx = nextIndex++;
+          await loadSingleFrame(idx);
         }
-        await Promise.all(chunk);
       }
-      setIsReady(true);
+
+      const workers = Array.from({ length: CONCURRENCY }, () => worker());
+      await Promise.all(workers);
+
+      if (!isCancelled) {
+        isReadyRef.current = true;
+        setIsReady(true);
+      }
     };
 
-    // Safety timeout: ensure loader never remains stuck on screen
-    const safetyTimer = setTimeout(() => {
-      setIsReady(true);
-    }, 700);
-
-    imagesRef.current = images;
     loadAll();
 
     return () => {
       isCancelled = true;
-      clearTimeout(safetyTimer);
     };
   }, [renderFrame, updateDimensions]);
 
@@ -589,6 +622,7 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
           switchToGuided: () => void;
           goToSection: (sec: number) => void;
           getState: () => AppState;
+          isReady: () => boolean;
         };
       }
     ).__portfolioState = {
@@ -596,6 +630,7 @@ export default function ScrollyCanvas({ children }: ScrollyCanvasProps) {
       switchToGuided,
       goToSection,
       getState: () => appStateRef.current,
+      isReady: () => isReadyRef.current,
     };
 
     return () => {
